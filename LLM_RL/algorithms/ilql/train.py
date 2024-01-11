@@ -22,6 +22,18 @@ from LLM_RL.algorithms.value_rl_base.base_interface import ValueRLInference
 import jax.numpy as jnp
 import flax.linen as nn
 
+# @dhawal adding tensorboard
+from torch.utils.tensorboard import SummaryWriter  # Import SummaryWriter
+
+def log_tensorboard(writer, logs, step):
+    for k, v in logs.items():
+        if isinstance(v, dict):
+            # modify all the keys with the header of k
+            modified_dict = {f'{k}/{key}'  : value for key, value in v.items()}
+            log_tensorboard(writer, modified_dict, step)
+        else:
+            writer.add_scalar(k, v, step)
+
 def dump_state(
     base_model: FlaxPreTrainedModel, 
     q_head_model: nn.Module, 
@@ -228,6 +240,9 @@ def train_loop(
     wandb_project: Optional[str], 
     wandb_run_name: Optional[str], 
     wandb_config: Optional[Dict[str, Any]], 
+    # @Dhawal, add tensorboard flags
+    use_tensorboard: bool,
+    tensorboard_log_dir: Optional[str], 
     is_main_process: Optional[bool]=None, 
     **loop_state: Dict[Hashable, Any], 
 ) -> Tuple[Train, Inference]:
@@ -235,6 +250,12 @@ def train_loop(
     if is_main_process is None:
         is_main_process = jax.process_index() == 0
     
+    # @Dhawal: create tensorboard object
+    writer = None
+    print("use_tb", use_tensorboard, "tensorboard_log_dir", tensorboard_log_dir)
+    if use_tensorboard and tensorboard_log_dir:
+        writer = SummaryWriter(tensorboard_log_dir)  # Create the writer
+
     # initalize wandb
     wandb_id = loop_state.get('wandb_id', None)
     if use_wandb and is_main_process:
@@ -333,6 +354,9 @@ def train_loop(
         # publish eval logs
         eval_logs = pull_logs(label_logs(eval_logs, 'eval', {'step': step+1, 'epoch': epoch}))
         log(eval_logs, use_wandb and is_main_process)
+        if use_tensorboard:
+            log_tensorboard(writer, eval_logs, step+1)
+
 
         # conditionally save best model and optimizer state
         if save_dir is not None and save_best and eval_perf < best_perf:
@@ -393,6 +417,8 @@ def train_loop(
                 logs = combine_logs(train_logs)
                 logs = pull_logs(label_logs(logs, 'train', {'step': step+1, 'epoch': epoch}))
                 log(logs, use_wandb and is_main_process)
+                if use_tensorboard:
+                    log_tensorboard(writer, logs, step+1)
                 train_logs = []
             
             # begin evaluation
